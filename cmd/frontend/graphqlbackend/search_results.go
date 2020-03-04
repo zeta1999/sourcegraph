@@ -471,7 +471,7 @@ var searchResponseCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Number of searches that have ended in the given status (success, error, timeout, partial_timeout).",
 }, []string{"status", "alert_type"})
 
-func atomicSearch(r *searchResolver, ctx context.Context) (*SearchResultsResolver, error) {
+func (r *searchResolver) atomicSearch(ctx context.Context) (*SearchResultsResolver, error) {
 	rr, err := r.resultsWithTimeoutSuggestion(ctx)
 
 	// Record what type of response we sent back via Prometheus.
@@ -499,12 +499,12 @@ func merge(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
 	return &SearchResultsResolver{}, nil
 }
 
-func EvaluateOperator(operator search.Operator) (*SearchResultsResolver, error) {
+func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.Operator) (*SearchResultsResolver, error) {
 	result := &SearchResultsResolver{}
 	new := &SearchResultsResolver{}
 	var err error
 	for _, node := range operator.Operands {
-		new, err = Evaluate([]search.Node{node})
+		new, err = r.Evaluate(ctx, []search.Node{node})
 		if err != nil {
 			return nil, err
 		}
@@ -521,17 +521,18 @@ func EvaluateOperator(operator search.Operator) (*SearchResultsResolver, error) 
 	return result, nil
 }
 
-func Evaluate(nodes []search.Node) (*SearchResultsResolver, error) {
+func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*SearchResultsResolver, error) {
 	result := &SearchResultsResolver{}
 	var err error
 	for _, node := range nodes {
-		switch v := node.(type) {
+		switch term := node.(type) {
 		case search.Operator:
-			result, err = EvaluateOperator(v)
+			result, err = r.EvaluateOperator(ctx, term)
 		case search.Parameter:
-			if node.(search.Parameter).Field == "content" {
-				fmt.Printf("search for %s", node.(search.Parameter).Value)
+			if term.Field == "content" {
+				log15.Info("Atomic search", "for", term.Value)
 			}
+			result, err = r.atomicSearch(ctx)
 		}
 		if err != nil {
 			return nil, err
@@ -547,7 +548,7 @@ func (r *searchResolver) Results(ctx context.Context) (*SearchResultsResolver, e
 		return r.paginatedResults(ctx)
 	}
 
-	return atomicSearch(r, ctx)
+	return r.atomicSearch(ctx)
 }
 
 // resultsWithTimeoutSuggestion calls doResults, and in case of deadline
