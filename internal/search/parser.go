@@ -39,6 +39,7 @@ type operatorKind int
 const (
 	Or operatorKind = iota
 	And
+	Concat
 )
 
 // Operator is a nonterminal node of kind Kind with child nodes Operands.
@@ -63,11 +64,15 @@ func (node Operator) String() string {
 		result = append(result, child.String())
 	}
 	var kind string
-	if node.Kind == Or {
+	switch node.Kind {
+	case Or:
 		kind = "or"
-	} else {
+	case And:
 		kind = "and"
+	case Concat:
+		kind = "concat"
 	}
+
 	return fmt.Sprintf("(%s %s)", kind, strings.Join(result, " "))
 }
 
@@ -226,16 +231,16 @@ func (p *parser) parseParameterList() ([]Node, error) {
 				// Return a non-nil node if we parsed "()".
 				return []Node{Parameter{Value: ""}}, nil
 			}
-			return nodes, nil
+			return newOperator(nodes, Concat), nil
 		case p.match(AND), p.match(OR):
 			// Caller advances.
-			return nodes, nil
+			return newOperator(nodes, Concat), nil
 		default:
 			parameter := p.ParseParameter()
 			nodes = append(nodes, parameter)
 		}
 	}
-	return nodes, nil
+	return newOperator(nodes, Concat), nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,
