@@ -497,22 +497,29 @@ func (r *searchResolver) atomicSearch(ctx context.Context) (*SearchResultsResolv
 }
 
 func intersect(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
+	log15.Info("intersect called", "yes", "yes")
 	var merged []SearchResultResolver
 	if left != nil && left.SearchResults != nil {
+		log15.Info("intersect called", "left nonnil", len(left.SearchResults))
 		if right != nil && right.SearchResults != nil {
+			log15.Info("intersect called", "right nonnil", len(right.SearchResults))
+			log15.Info("intersect", "left", len(left.SearchResults), "right", len(right.SearchResults))
 			for _, ltmp := range left.SearchResults {
 				if ltmpFileMatch, ok := ltmp.ToFileMatch(); ok {
+					log15.Info("\t checking", "left match", ltmpFileMatch.JPath)
 					// does l exist in r?
 					for _, rtmp := range right.SearchResults {
 						if rtmpFileMatch, ok := rtmp.ToFileMatch(); ok {
+							log15.Info("\t\t against", "right match", rtmpFileMatch.JPath)
 							if ltmpFileMatch.JPath == rtmpFileMatch.JPath {
-								// log15.Info("m", "merged", ltmpFileMatch.JPath)
+								log15.Info("m", "merged", ltmpFileMatch.JPath)
 								merged = append(merged, ltmp)
 							}
 						}
 					}
 				}
 			}
+			log15.Info("left results set to merged", "yes", "yes")
 			left.SearchResults = merged
 			return left, nil
 		}
@@ -524,12 +531,16 @@ func intersect(left, right *SearchResultsResolver) (*SearchResultsResolver, erro
 func union(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
 	// YOLO: no union of time or alerts or searchResultsCommon
 	var resolver *SearchResultsResolver
-	if left != nil && left.SearchResults != nil {
+	log15.Info("Union called", "yes", "it was")
+	if left != nil && left.SearchResults != nil && right.SearchResults != nil {
+		log15.Info("\tUnion called", "left", "nonnil")
 		left.SearchResults = append(left.SearchResults, right.SearchResults...)
 		resolver = left
 	} else if right != nil && right.SearchResults != nil {
+		log15.Info("\tUnion called", "right", "nonnil; left nil")
 		resolver = right
 	}
+	log15.Info("Union called", "returning", "resolver now")
 	return resolver, nil
 }
 
@@ -538,20 +549,42 @@ func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.O
 	result := &SearchResultsResolver{}
 	var new *SearchResultsResolver
 	var err error
-	for _, node := range operator.Operands {
+	for i, node := range operator.Operands {
 		new, err = r.Evaluate(ctx, []search.Node{node})
 		if err != nil {
 			return nil, err
 		}
-		switch operator.Kind {
-		case search.And:
-			result, err = intersect(result, new) // set difference
-		case search.Or:
-			result, err = union(result, new)
+		if new != nil {
+			log15.Info("Evaluated", "child. new is nonnil and ", len(new.SearchResults))
+			switch operator.Kind {
+			case search.And:
+				log15.Info("Evaluating", "intersect on", "children")
+				if i == 0 { // this doesn't work, because it's only true if we don't have other params like repo:foo
+					// If this is the first value, don't intersect it with result nil, intersect will return nil.
+					log15.Info("intersect", "only one", "setting result to new")
+					result = new
+				} else {
+					result, err = intersect(result, new) // set difference
+					if result == nil {
+						log15.Info("intersect", "was", "nil result after nonnil intersect of result and new")
+					}
+				}
+			case search.Or:
+				log15.Info("Evaluating", "union on", "children")
+				result, err = union(result, new)
+				if result == nil {
+					log15.Info("union", "was", "nil result")
+				}
+			}
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			log15.Info("Evaluated", "child. ", "it was nil. probably a non-content param like repo:")
 		}
-		if err != nil {
-			return nil, err
-		}
+	}
+	if result == nil {
+		log15.Info("Eval operator result", "is nil", "did not expect")
 	}
 	return result, nil
 }
@@ -581,6 +614,10 @@ func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*Se
 				log15.Info("Query before mod", "for", r.query)
 				val := querytypes.Value{String: &term.Value}
 				r.query.Fields[query.FieldDefault] = []*querytypes.Value{&val}
+				// HACK to get around the issue where we can't well distinguish between repo:foo and <pattern>
+				//rx := regexp.MustCompile("gorilla-mux")
+				//valu := querytypes.Value{Regexp: rx}
+				//r.query.Fields[query.FieldRepo] = []*querytypes.Value{&valu}
 				log15.Info("Query after mod", "for", r.query)
 				new, err = r.atomicSearch(ctx)
 				if err != nil {
@@ -588,10 +625,13 @@ func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*Se
 				}
 				if new != nil {
 					result, err = union(result, new)
+					log15.Info("union", "new", len(new.SearchResults))
 					if err != nil {
 						return nil, err
 					}
 				}
+			} else {
+				return nil, nil // this means that any param that is not content won't be a candidate for merging results when evaling operator
 			}
 		}
 	}
