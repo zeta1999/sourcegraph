@@ -471,13 +471,7 @@ var searchResponseCounter = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Number of searches that have ended in the given status (success, error, timeout, partial_timeout).",
 }, []string{"status", "alert_type"})
 
-func (r *searchResolver) Results(ctx context.Context) (*SearchResultsResolver, error) {
-	// If the request is a paginated one, we handle it separately. See
-	// paginatedResults for more details.
-	if r.pagination != nil {
-		return r.paginatedResults(ctx)
-	}
-
+func atomicSearch(r *searchResolver, ctx context.Context) (*SearchResultsResolver, error) {
 	rr, err := r.resultsWithTimeoutSuggestion(ctx)
 
 	// Record what type of response we sent back via Prometheus.
@@ -498,8 +492,62 @@ func (r *searchResolver) Results(ctx context.Context) (*SearchResultsResolver, e
 		status = "unknown"
 	}
 	searchResponseCounter.WithLabelValues(status, alertType).Inc()
-
 	return rr, err
+}
+
+func merge(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
+	return &SearchResultsResolver{}, nil
+}
+
+func EvaluateOperator(operator search.Operator) (*SearchResultsResolver, error) {
+	result := &SearchResultsResolver{}
+	new := &SearchResultsResolver{}
+	var err error
+	for _, node := range operator.Operands {
+		new, err = Evaluate([]search.Node{node})
+		if err != nil {
+			return nil, err
+		}
+		switch operator.Kind {
+		case search.And:
+			result, err = merge(result, new) // set difference
+		case search.Or:
+			result, err = merge(result, new) // set union
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func Evaluate(nodes []search.Node) (*SearchResultsResolver, error) {
+	result := &SearchResultsResolver{}
+	var err error
+	for _, node := range nodes {
+		switch v := node.(type) {
+		case search.Operator:
+			result, err = EvaluateOperator(v)
+		case search.Parameter:
+			if node.(search.Parameter).Field == "content" {
+				fmt.Printf("search for %s", node.(search.Parameter).Value)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (r *searchResolver) Results(ctx context.Context) (*SearchResultsResolver, error) {
+	// If the request is a paginated one, we handle it separately. See
+	// paginatedResults for more details.
+	if r.pagination != nil {
+		return r.paginatedResults(ctx)
+	}
+
+	return atomicSearch(r, ctx)
 }
 
 // resultsWithTimeoutSuggestion calls doResults, and in case of deadline
@@ -1002,6 +1050,7 @@ func (r *searchResolver) doResults(ctx context.Context, forceOnlyResultType stri
 		PatternInfo:     p,
 		Repos:           repos,
 		Query:           r.query,
+		NouveauQuery:    r.nouveauQuery,
 		UseFullDeadline: r.searchTimeoutFieldSet(),
 		Zoekt:           r.zoekt,
 		SearcherURLs:    r.searcherURLs,
