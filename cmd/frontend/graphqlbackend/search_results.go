@@ -36,7 +36,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/rcache"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
-	querytypes "github.com/sourcegraph/sourcegraph/internal/search/query/types"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
 )
@@ -506,13 +505,14 @@ func intersect(left, right *SearchResultsResolver) (*SearchResultsResolver, erro
 			log15.Info("intersect", "left", len(left.SearchResults), "right", len(right.SearchResults))
 			for _, ltmp := range left.SearchResults {
 				if ltmpFileMatch, ok := ltmp.ToFileMatch(); ok {
-					log15.Info("\t checking", "left match", ltmpFileMatch.JPath)
+					// log15.Info("\t checking", "left match", ltmpFileMatch.JPath)
 					// does l exist in r?
 					for _, rtmp := range right.SearchResults {
 						if rtmpFileMatch, ok := rtmp.ToFileMatch(); ok {
-							log15.Info("\t\t against", "right match", rtmpFileMatch.JPath)
+							//log15.Info("\t\t against", "right match", rtmpFileMatch.JPath)
 							if ltmpFileMatch.JPath == rtmpFileMatch.JPath {
 								log15.Info("m", "merged", ltmpFileMatch.JPath)
+								ltmpFileMatch.JLineMatches = append(ltmpFileMatch.JLineMatches, rtmpFileMatch.JLineMatches...)
 								merged = append(merged, ltmp)
 							}
 						}
@@ -580,10 +580,19 @@ func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.O
 				return nil, err
 			}
 		} else {
+			if operator.Kind == search.And {
+				log15.Info("XX Eval operator on AND", "is nil", "clearing")
+				return nil, nil // nil result on and implies no matches
+			}
+
 			log15.Info("Evaluated", "child. ", "it was nil. probably a non-content param like repo:")
 		}
 	}
 	if result == nil {
+		if operator.Kind == search.And {
+			log15.Info("Eval operator on AND", "is nil", "clearing")
+			return nil, nil // nil result on and implies no matches
+		}
 		log15.Info("Eval operator result", "is nil", "did not expect")
 	}
 	return result, nil
@@ -612,12 +621,16 @@ func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*Se
 			if term.Field == "" {
 				log15.Info("Atomic search", "for", term.Value)
 				log15.Info("Query before mod", "for", r.query)
-				val := querytypes.Value{String: &term.Value}
-				r.query.Fields[query.FieldDefault] = []*querytypes.Value{&val}
+				//val := querytypes.Value{String: &term.Value}
+				//r.query.Fields[query.FieldDefault] = []*querytypes.Value{&val}
 				// HACK to get around the issue where we can't well distinguish between repo:foo and <pattern>
-				//rx := regexp.MustCompile("gorilla-mux")
-				//valu := querytypes.Value{Regexp: rx}
+				//m := "mux"
+				//valu := querytypes.Value{String: &m}
 				//r.query.Fields[query.FieldRepo] = []*querytypes.Value{&valu}
+				q, p, _ := query.Process("repo:mux lang:go "+term.Value, query.SearchTypeRegex)
+				r.query = q
+				r.parseTree = p
+				r.originalQuery = "repo:mux lang:go " + term.Value
 				log15.Info("Query after mod", "for", r.query)
 				new, err = r.atomicSearch(ctx)
 				if err != nil {
