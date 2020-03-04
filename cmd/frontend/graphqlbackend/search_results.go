@@ -501,7 +501,7 @@ func merge(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
 
 func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.Operator) (*SearchResultsResolver, error) {
 	result := &SearchResultsResolver{}
-	new := &SearchResultsResolver{}
+	var new *SearchResultsResolver
 	var err error
 	for _, node := range operator.Operands {
 		new, err = r.Evaluate(ctx, []search.Node{node})
@@ -510,9 +510,11 @@ func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.O
 		}
 		switch operator.Kind {
 		case search.And:
-			result, err = merge(result, new) // set difference
+			// result, err = merge(result, new) // set difference
+			result = new
 		case search.Or:
-			result, err = merge(result, new) // set union
+			// result, err = merge(result, new) // set union
+			result = new
 		}
 		if err != nil {
 			return nil, err
@@ -531,8 +533,8 @@ func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*Se
 		case search.Parameter:
 			if term.Field == "content" {
 				log15.Info("Atomic search", "for", term.Value)
+				result, err = r.atomicSearch(ctx)
 			}
-			result, err = r.atomicSearch(ctx)
 		}
 		if err != nil {
 			return nil, err
@@ -548,7 +550,8 @@ func (r *searchResolver) Results(ctx context.Context) (*SearchResultsResolver, e
 		return r.paginatedResults(ctx)
 	}
 
-	return r.atomicSearch(ctx)
+	// return r.atomicSearch(ctx)
+	return r.Evaluate(ctx, r.nouveauQuery)
 }
 
 // resultsWithTimeoutSuggestion calls doResults, and in case of deadline
