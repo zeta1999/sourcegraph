@@ -36,6 +36,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/rcache"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
+	querytypes "github.com/sourcegraph/sourcegraph/internal/search/query/types"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
 )
@@ -495,11 +496,45 @@ func (r *searchResolver) atomicSearch(ctx context.Context) (*SearchResultsResolv
 	return rr, err
 }
 
-func merge(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
-	return &SearchResultsResolver{}, nil
+func intersect(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
+	var merged []SearchResultResolver
+	if left != nil && left.SearchResults != nil {
+		if right != nil && right.SearchResults != nil {
+			for _, ltmp := range left.SearchResults {
+				if ltmpFileMatch, ok := ltmp.ToFileMatch(); ok {
+					// does l exist in r?
+					for _, rtmp := range right.SearchResults {
+						if rtmpFileMatch, ok := rtmp.ToFileMatch(); ok {
+							if ltmpFileMatch.JPath == rtmpFileMatch.JPath {
+								// log15.Info("m", "merged", ltmpFileMatch.JPath)
+								merged = append(merged, ltmp)
+							}
+						}
+					}
+				}
+			}
+			left.SearchResults = merged
+			return left, nil
+		}
+	}
+	// no intersection
+	return nil, nil
+}
+
+func union(left, right *SearchResultsResolver) (*SearchResultsResolver, error) {
+	// YOLO: no union of time or alerts or searchResultsCommon
+	var resolver *SearchResultsResolver
+	if left != nil && left.SearchResults != nil {
+		left.SearchResults = append(left.SearchResults, right.SearchResults...)
+		resolver = left
+	} else if right != nil && right.SearchResults != nil {
+		resolver = right
+	}
+	return resolver, nil
 }
 
 func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.Operator) (*SearchResultsResolver, error) {
+	log15.Info("Evaluating", "for", operator.String())
 	result := &SearchResultsResolver{}
 	var new *SearchResultsResolver
 	var err error
@@ -510,11 +545,9 @@ func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.O
 		}
 		switch operator.Kind {
 		case search.And:
-			// result, err = merge(result, new) // set difference
-			result = new
+			result, err = intersect(result, new) // set difference
 		case search.Or:
-			// result, err = merge(result, new) // set union
-			result = new
+			result, err = union(result, new)
 		}
 		if err != nil {
 			return nil, err
@@ -525,19 +558,41 @@ func (r *searchResolver) EvaluateOperator(ctx context.Context, operator search.O
 
 func (r *searchResolver) Evaluate(ctx context.Context, nodes []search.Node) (*SearchResultsResolver, error) {
 	result := &SearchResultsResolver{}
+	var new *SearchResultsResolver
 	var err error
 	for _, node := range nodes {
 		switch term := node.(type) {
 		case search.Operator:
-			result, err = r.EvaluateOperator(ctx, term)
-		case search.Parameter:
-			if term.Field == "content" {
-				log15.Info("Atomic search", "for", term.Value)
-				result, err = r.atomicSearch(ctx)
+			log15.Info("Op", "for", term.String())
+			new, err = r.EvaluateOperator(ctx, term)
+			if err != nil {
+				return nil, err
 			}
-		}
-		if err != nil {
-			return nil, err
+			if new != nil {
+				result, err = union(result, new)
+				if err != nil {
+					return nil, err
+				}
+			}
+		case search.Parameter:
+			log15.Info("Param", "is", term.Value)
+			if term.Field == "" {
+				log15.Info("Atomic search", "for", term.Value)
+				log15.Info("Query before mod", "for", r.query)
+				val := querytypes.Value{String: &term.Value}
+				r.query.Fields[query.FieldDefault] = []*querytypes.Value{&val}
+				log15.Info("Query after mod", "for", r.query)
+				new, err = r.atomicSearch(ctx)
+				if err != nil {
+					return nil, err
+				}
+				if new != nil {
+					result, err = union(result, new)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 	}
 	return result, nil
