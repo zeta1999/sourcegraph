@@ -39,6 +39,7 @@ type operatorKind int
 const (
 	Or operatorKind = iota
 	And
+	Concat
 )
 
 // Operator is a nonterminal node of kind Kind with child nodes Operands.
@@ -65,8 +66,10 @@ func (node Operator) String() string {
 	var kind string
 	if node.Kind == Or {
 		kind = "or"
-	} else {
+	} else if node.Kind == And {
 		kind = "and"
+	} else {
+		kind = "concat"
 	}
 	return fmt.Sprintf("(%s %s)", kind, strings.Join(result, " "))
 }
@@ -210,7 +213,7 @@ func (p *parser) parseParameterList() ([]Node, error) {
 			return nil, err
 		}
 		if p.done() {
-			break
+			goto Done
 		}
 		switch {
 		case p.expect(LPAREN):
@@ -224,18 +227,34 @@ func (p *parser) parseParameterList() ([]Node, error) {
 			p.balanced--
 			if len(nodes) == 0 {
 				// Return a non-nil node if we parsed "()".
-				return []Node{Parameter{Value: ""}}, nil
+				nodes = []Node{Parameter{Value: ""}}
 			}
-			return nodes, nil
+			goto Done
 		case p.match(AND), p.match(OR):
 			// Caller advances.
-			return nodes, nil
+			goto Done
 		default:
 			parameter := p.ParseParameter()
+			/*if parameter.Field == "" {
+				nodes = append(nodes, newOperator([]Node{parameter}, Concat)...)
+			} else {
+				log15.Info("not", "concat", parameter.String())
+				nodes = append(nodes, newOperator([]Node{parameter}, Concat)...)
+			}*/
 			nodes = append(nodes, parameter)
 		}
 	}
-	return nodes, nil
+Done:
+	var fixed []Node
+	var cted []Node
+	for _, n := range nodes {
+		if v, ok := n.(Parameter); ok && v.Field == "" {
+			cted = append(cted, v)
+			continue
+		}
+		fixed = append(fixed, n)
+	}
+	return append(fixed, newOperator(cted, Concat)...), nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,
