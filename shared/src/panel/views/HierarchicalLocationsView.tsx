@@ -214,8 +214,11 @@ export class HierarchicalLocationsView extends React.PureComponent<HierarchicalL
         return (
             <div className="hierarchical-locations-wrapper">
                 {this.state.locationsOrError.truncated && (
-                    <div className="hierarchical-locations-wrapper__banner bg-info">
-                        <strong>Large result set - only showing the first {MAXIMUM_LOCATION_RESULTS} results.</strong>
+                    <div className="alert alert-warning py-1 px-3 m-2 text-nowrap text-center">
+                        <small>
+                            <strong>Large result set</strong> - only showing the first {MAXIMUM_LOCATION_RESULTS}{' '}
+                            results.
+                        </small>
                     </div>
                 )}
 
