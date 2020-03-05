@@ -312,7 +312,8 @@ export class Backend {
          * This method takes a handler that executes the current page of results and returns a new
          * cursor for the **same phase** of results. If there are no more results in that phase of
          * the result set, the cursor is undefined. In this case, we call the `makeCursor` factory
-         * function to construct the cursor for the next phase of pagination.
+         * to construct the cursor for the next phase of pagination. When no further data are
+         * available in any phase, the factory returns undefined.
          *
          * If the locations from the handler function do not produce a full page of results, the
          * next page of results are evaluated with a modified limit.
@@ -465,10 +466,10 @@ export class Backend {
         // First get all LSIF reference result locations for the given position.
         const locationSet = await database.references(cursor.path, cursor.position, ctx)
 
-        // Search the references table of the current dump. This search is necessary, but may be
-        // un-intuitive. A 'Find References' operation on a reference should also return references
-        // to the definition. These are not necessarily fully linked in the LSIF data. This method
-        // returns a cursor if there are reference rows remaining for a subsequent page.
+        // Search the references table of the current dump. This search is necessary because
+        // we want a 'Find References' operation on a reference to also return references to
+        // the governing definition, and those may not be fully linked in the LSIF data. This
+        // method returns a cursor if there are reference rows remaining for a subsequent page.
         for (const moniker of cursor.monikers) {
             const { locations: monikerLocations } = await database.monikerResults(
                 sqliteModels.ReferenceModel,
@@ -639,7 +640,7 @@ export class Backend {
 
     /**
      * Determine if the moniker and package identified by the pagination cursor has at least one
-     * remote repository. containing that definition. We use this to determine if we should move
+     * remote repository containing that definition. We use this to determine if we should move
      * on to the next phase without doing it unconditionally and yielding an empty last page.
      *
      * @param repositoryId The repository identifier.
@@ -710,6 +711,108 @@ export class Backend {
             if (batchDumpId === dumpId) {
                 continue
             }
+            const { dump, database } = dumpAndDatabase
+
+            const { locations, count } = await database.monikerResults(
+                sqliteModels.ReferenceModel,
+                moniker,
+                { take: limit, skip: cursor.skipResultsInDump },
+                ctx
+            )
+
+            if (locations.length > 0) {
+                const newResultOffset = cursor.skipResultsInDump + locations.length
+                const moreDumps = i + 1 < cursor.dumpIds.length
+                const nextCursor = { ...cursor, skipResultsInDump: cursor.skipResultsInDump + limit }
+                const nextDumpCursor = { ...cursor, skipDumpsInBatch: i + 1, skipResultsInDump: 0 }
+                const nextBatchCursor = {
+                    ...cursor,
+                    dumpIds: [],
+                    skipDumpsInBatch: 0,
+                    skipResultsInDump: 0,
+                }
+
+                return {
+                    locations: locations.map(loc => locationFromDatabase(dump.root, loc)),
+                    newCursor:
+                        newResultOffset < count
+                            ? nextCursor
+                            : moreDumps
+                            ? nextDumpCursor
+                            : cursor.skipDumpsWhenBatching < cursor.totalDumpsWhenBatching
+                            ? nextBatchCursor
+                            : undefined,
+                }
+            }
+        }
+
+        return { locations: [] }
+    }
+
+    /**
+     * Find the locations attached to the target moniker in the dump where it is defined. If
+     * the moniker has attached package information, then Postgres is queried for the target
+     * package. That database is opened, and its definitions or references table is queried
+     * for the target moniker (depending on the given model).
+     *
+     * @param document The document containing the definition.
+     * @param moniker The target moniker.
+     * @param model The target model.
+     * @param pagination A limit and offset to use for the query.
+     * @param ctx The tracing context.
+     */
+    private async lookupMoniker(
+        document: sqliteModels.DocumentData,
+        moniker: sqliteModels.MonikerData,
+        model: typeof sqliteModels.DefinitionModel | typeof sqliteModels.ReferenceModel,
+        pagination: { skip?: number; take?: number },
+        ctx: TracingContext = {}
+    ): Promise<{ locations: InternalLocation[]; count: number }> {
+        const packageInformation = this.lookupPackageInformation(document, moniker, ctx)
+        if (!packageInformation) {
+            return { locations: [], count: 0 }
+        }
+
+        const packageEntity = await this.dependencyManager.getPackage(
+            moniker.scheme,
+            packageInformation.name,
+            packageInformation.version
+        )
+        if (!packageEntity) {
+            return { locations: [], count: 0 }
+        }
+
+        logSpan(ctx, 'package_entity', {
+            moniker,
+            packageInformation,
+            packageRepositoryId: packageEntity.dump.repositoryId,
+            packageCommit: packageEntity.dump.commit,
+        })
+
+        const { locations, count } = await this.createDatabase(packageEntity.dump).monikerResults(
+            model,
+            moniker,
+            pagination,
+            ctx
+        )
+        return { locations: locations.map(loc => locationFromDatabase(packageEntity.dump.root, loc)), count }
+    }
+
+    /**
+     * Retrieve the package information associated with the given moniker.
+     *
+     * @param document The document containing an instance of the moniker.
+     * @param moniker The target moniker.
+     * @param ctx The tracing context.
+     */
+    private lookupPackageInformation(
+        document: sqliteModels.DocumentData,
+        moniker: sqliteModels.MonikerData,
+        ctx: TracingContext = {}
+    ): sqliteModels.PackageInformationData | undefined {
+        if (!moniker.packageInformationId) {
+            return undefined
+        }
 
             const dumpAndDatabase = await this.getDumpAndDatabaseById(batchDumpId)
             if (!dumpAndDatabase) {
@@ -755,9 +858,9 @@ export class Backend {
 
     /**
      * Find the locations attached to the target moniker in the dump where it is defined. If
-     * the moniker has attached package information, then Postgres is queried for the target
-     * package. That database is opened, and its definitions or references table is queried
-     * for the target moniker (depending on the given model).
+     * the moniker has attached package information, then query Postgres for the target
+     * package. Open that package's database and query its definitions or references
+     * table for the target moniker (depending on the given model).
      *
      * @param document The document containing the definition.
      * @param moniker The target moniker.

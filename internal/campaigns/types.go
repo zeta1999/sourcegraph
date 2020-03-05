@@ -386,34 +386,6 @@ func (c *Changeset) URL() (s string, err error) {
 	}
 }
 
-// ReviewState of a Changeset.
-func (c *Changeset) ReviewState() (s ChangesetReviewState, err error) {
-	states := map[ChangesetReviewState]bool{}
-
-	switch m := c.Metadata.(type) {
-	case *github.PullRequest:
-		// For GitHub we need to use `ChangesetEvents.ReviewState`
-		log15.Warn("Changeset.ReviewState() called, but GitHub review state is calculated through ChangesetEvents.ReviewState", "changeset", c)
-		return ChangesetReviewStatePending, nil
-
-	case *bitbucketserver.PullRequest:
-		for _, r := range m.Reviewers {
-			switch r.Status {
-			case "UNAPPROVED":
-				states[ChangesetReviewStatePending] = true
-			case "NEEDS_WORK":
-				states[ChangesetReviewStateChangesRequested] = true
-			case "APPROVED":
-				states[ChangesetReviewStateApproved] = true
-			}
-		}
-	default:
-		return "", errors.New("unknown changeset type")
-	}
-
-	return SelectReviewState(states), nil
-}
-
 // Events returns the list of ChangesetEvents from the Changeset's metadata.
 func (c *Changeset) Events() (events []*ChangesetEvent) {
 	switch m := c.Metadata.(type) {
@@ -909,7 +881,7 @@ func (e *ChangesetEvent) ReviewState() (ChangesetReviewState, error) {
 			return "", errors.New("ChangesetEvent metadata event not PullRequestReview")
 		}
 
-		s := ChangesetReviewState(review.State)
+		s := ChangesetReviewState(strings.ToUpper(review.State))
 		if !s.Valid() {
 			// Ignore invalid states
 			log15.Warn("invalid review state", "state", review.State)

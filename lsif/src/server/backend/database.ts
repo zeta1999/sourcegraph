@@ -124,8 +124,7 @@ export class Database {
     }
 
     /**
-     * Return a list of locations that reference the symbol at the given position. The
-     * resulting list of locations does not contain duplicates.
+     * Return a list of unique locations that reference the symbol at the given position.
      *
      * @param path The path of the document to which the position belongs.
      * @param position The current hover position.
@@ -281,7 +280,8 @@ export class Database {
 
     /**
      * Return a parsed document that describes the given path. The result of this
-     * method is cached across all database instances.
+     * method is cached across all database instances. If the document is not found
+     * it returns undefined; other errors will throw.
      *
      * @param path The path of the document.
      * @param ctx The tracing context.
@@ -530,15 +530,15 @@ const monikerKindPreferences = ['import', 'local', 'export']
 
 // A map from moniker schemes to schemes that subsume them. The schemes
 // identified by keys should be removed from the sets of monikers that
-// also contain the schemed identified by that key's value.
+// also contain the scheme identified by that key's value.
 const subsumedMonikers = new Map([
     ['go', 'gomod'],
     ['tsc', 'npm'],
 ])
 
 /**
- * Normalize the set of monikers by filtering and sorting the list based on
- * the moniker kind and scheme values.
+ * Normalize the set of monikers by filtering, sorting, and removing
+ * duplicates from the list based on the moniker kind and scheme values.
  *
  * @param monikers The list of monikers.
  */
