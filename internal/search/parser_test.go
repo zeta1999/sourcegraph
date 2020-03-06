@@ -142,6 +142,16 @@ func Test_Parse(t *testing.T) {
 			Input: "(((a b c))) and d",
 			Want:  "(and (concat a b c) d)",
 		},
+		{
+			Name:  "Paren reduction over operators",
+			Input: "a (b and c) d",
+			Want:  "(concat a (and b c) d)",
+		},
+		{
+			Name:  "Paren reduction over operators",
+			Input: "a repo:b repo:c (d repo:e repo:f)",
+			Want:  "",
+		},
 		// Errors.
 		{
 			Name:  "Unbalanced",

@@ -240,7 +240,11 @@ func (p *parser) parseParameterList() ([]Node, error) {
 			nodes = append(nodes, parameter)
 		}
 	}
-	return newOperator(nodes, Concat), nil
+	var newNodes []Node
+	for _, n := range nodes {
+		newNodes = append(newNodes, newOperator([]Node{n}, Concat)...)
+	}
+	return newNodes, nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,
