@@ -245,16 +245,19 @@ func (p *parser) parseParameterList() ([]Node, error) {
 		}
 	}
 Done:
-	var fixed []Node
-	var cted []Node
-	for _, n := range nodes {
-		if v, ok := n.(Parameter); ok && v.Field == "" {
-			cted = append(cted, v)
-			continue
+	/*
+		var fixed []Node
+		var cted []Node
+		for _, n := range nodes {
+			if v, ok := n.(Parameter); ok && v.Field == "" {
+				cted = append(cted, v)
+				continue
+			}
+			fixed = append(fixed, n)
 		}
-		fixed = append(fixed, n)
-	}
-	return append(fixed, newOperator(cted, Concat)...), nil
+		return append(fixed, newOperator(cted, Concat)...), nil
+	*/
+	return newOperator(nodes, Concat), nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,
@@ -269,12 +272,40 @@ func reduce(left, right []Node, kind operatorKind) ([]Node, bool) {
 	switch term := right[0].(type) {
 	case Operator:
 		if kind == term.Kind {
-			// Reduce right node.
-			left = append(left, term.Operands...)
-			if len(right) > 1 {
-				left = append(left, right[1:]...)
+			// Reduce right node unconditionally if not Concat
+			if kind != Concat {
+				left = append(left, term.Operands...)
+				if len(right) > 1 {
+					left = append(left, right[1:]...)
+				}
+				return left, true
+			} else {
+				// merge left and right for some
+				// (concat left (concat right), rest)
+				//
+				// What should the operation do on right with
+				// this information? It should merge the concats
+				// as usual...
+				patterns := []Node{}
+				for _, node := range term.Operands {
+					if param, ok := node.(Parameter); ok && param.Field == "" {
+						// A pattern.
+						patterns = append(patterns, node)
+					} else {
+						// Not a pattern. Either
+						// field:value, or a nested
+						// term. Just merge.
+						left = append(left, node)
+					}
+				}
+				concated := []Node{Operator{Kind: Concat, Operands: patterns}}
+				left = append(concated, left...)
+				if len(right) > 1 {
+					// process the remainder
+					left = append(left, right[1:]...)
+				}
+				return left, true
 			}
-			return left, true
 		}
 	case Parameter:
 		if term.Value == "" {
@@ -284,11 +315,24 @@ func reduce(left, right []Node, kind operatorKind) ([]Node, bool) {
 			}
 			return left, true
 		}
-		if operator, ok := left[0].(Operator); ok && operator.Kind == kind {
-			// Reduce left node.
-			return append(operator.Operands, right...), true
-
+		if kind != Concat {
+			if operator, ok := left[0].(Operator); ok && operator.Kind == kind {
+				// Left's children are flattened to the same level as right, because left is the same kind as the parent node we are processing.
+				return append(operator.Operands, right...), true
+			}
+		} else {
+			// case	(concat (concat left rest) right)
+			// what should happen now?
+			if operator, ok := left[0].(Operator); ok && operator.Kind == kind {
+				// We have a concat parent, and left is also
+				// concat. so we can flatten this out as long as
+				// the operands can be flattened. What can be
+				// trickled up? repo:foo can. not patterns or
+				// terms though.
+				return append(operator.Operands, right...), true
+			}
 		}
+
 	}
 	if len(right) > 1 {
 		// Reduce right list.

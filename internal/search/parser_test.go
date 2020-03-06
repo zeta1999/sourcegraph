@@ -119,15 +119,32 @@ func Test_Parse(t *testing.T) {
 			Want:  "(concat a b c d)",
 		},
 		{
-			Name:  "TODO: this should keep repo in the group",
+			Name:  "TODO: this should keep repo in the group. Why though? that doesn't make much sense",
 			Input: "a b (repo:foo c d)",
 			Want:  "(concat a b (concat repo:foo c d)",
 		},
 		{
-			Name:  "TODO: this should be (concat (bar and foobar) baz) or equivalent",
+			Name:  "TODO: this should be (concat foo (bar and foobar) baz) or equivalent",
 			Input: "foo (bar AND foobar) baz",
-			Want:  "(and (and bar foobar) (concat foo baz))",
+			Want:  "(concat foo (and bar foobar) baz)",
 		},
+		// If we do too generally, spaces will imply concat. But we only
+		// want to imply concat for search patterns. Implicit "AND" is
+		// otherwise fine, we don't want to lose that. Alternative, easy
+		// way is that we can literally just collect and create concat
+		// for search patterns at each level, and promote others to and.
+
+		// The problem with doing this in reduce is that
+		// what do we do about "a (b and c) d" because we can't
+		// really express (concat a), it reduces to a. But that means that the
+		// pattern before can't be (and (concat a) (b and c) (concat d)).
+		// It needs to be (concat a (b and c) d). Now we can get that form,
+		// but the tricky part is when hwe have field:value cases.
+
+		// Thus, GOAL: only nested queries, or patterns can potentially
+		// have concat applied. Sequences of patterns MUST have concat
+		// applied. field:value should never be in a concat, but rather
+		// in an AND or OR.
 
 		/*
 			{
