@@ -239,7 +239,22 @@ func (p *parser) parseParameterList() ([]Node, error) {
 		}
 	}
 Done:
-	return newOperator(nodes, Concat), nil
+	patts := []Node{}
+	other := []Node{}
+	for _, n := range nodes {
+		switch v := n.(type) {
+		case Parameter:
+			if v.Field == "" {
+				patts = append(patts, n)
+			} else {
+				other = append(other, n)
+			}
+		case Operator:
+			patts = append(patts, n)
+		}
+	}
+	concatted := newOperator(patts, Concat)
+	return newOperator(append(other, concatted...), And), nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,

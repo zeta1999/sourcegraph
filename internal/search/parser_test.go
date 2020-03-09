@@ -111,7 +111,7 @@ func Test_Parse(t *testing.T) {
 		{
 			Name:  "Reduced complex query mixed caps",
 			Input: "a and b AND c or d and (e OR f) g repo:foo h i or j",
-			Want:  "(or (and a b c) (and d (or e f) repo:foo (concat g h i)) j)",
+			Want:  "(or (and a b c) (and d repo:foo (concat (or e f) g h i)) j)",
 		},
 		{
 			Name:  "TODO: this should flatten to concat entirely",
@@ -119,14 +119,34 @@ func Test_Parse(t *testing.T) {
 			Want:  "(concat a b c d)",
 		},
 		{
-			Name:  "TODO: this should keep repo in the group. Why though? that doesn't make much sense",
+			Name:  "TODO: this is a nonsense case we should validate statically. even simplifying it doesn't make sense.",
 			Input: "a b (repo:foo c d)",
-			Want:  "(concat a b (concat repo:foo c d)",
+			Want:  "(concat a b (and repo:foo (concat c d)))",
 		},
 		{
 			Name:  "TODO: this should be (concat foo (bar and foobar) baz) or equivalent",
 			Input: "foo (bar AND foobar) baz",
 			Want:  "(concat foo (and bar foobar) baz)",
+		},
+		{
+			Name:  "XXX",
+			Input: "repo:foo (repo:bar (repo:baz a b c d e))",
+			Want:  "(and repo:foo repo:bar repo:baz (concat a b c d e))",
+		},
+		{
+			Name:  "XXX",
+			Input: "repo:foo (repo:bar (repo:baz a b c d) e)",
+			Want:  "(and repo:foo repo:bar (concat (and repo:baz (concat a b c d)) e))",
+		},
+		{
+			Name:  "XXX",
+			Input: "(a) repo:foo (b)",
+			Want:  "(and repo:foo (concat a b))",
+		},
+		{
+			Name:  "XXX",
+			Input: "(a) repo:foo (b) d (e (f (file:bar) g)) h (i (j or file:baz k) l)",
+			Want:  "(and repo:foo (concat a b d e (and file:bar (concat f g)) h i (or j (and file:baz k)) l))",
 		},
 		// If we do too generally, spaces will imply concat. But we only
 		// want to imply concat for search patterns. Implicit "AND" is
