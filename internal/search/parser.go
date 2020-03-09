@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
+	log15 "gopkg.in/inconshreveable/log15.v2"
 )
 
 /*
@@ -207,6 +208,76 @@ func (p *parser) ParseParameter() Parameter {
 	return ScanParameter(p.buf[start:p.pos])
 }
 
+func visit(node Node, f func(node Node)) {
+	switch v := node.(type) {
+	case Parameter:
+		f(v)
+	case Operator:
+		f(v)
+		for _, n := range v.Operands {
+			visit(n, f)
+		}
+	}
+}
+
+func containsPattern(node Node) bool {
+	var initial bool
+	f := func(node Node) {
+		switch v := node.(type) {
+		case Parameter:
+			if v.Field == "" {
+				initial = true
+			}
+		}
+	}
+	visit(node, f)
+	return initial
+}
+
+// partitionParameters constructs a parse tree to distinguish terms where
+// ordering is insignificant (e.g., "repo:foo file:bar") versus terms where
+// ordering may be significant (e.g., search patterns like "foo bar"). Search
+// patterns are parameters whose field is the empty string.
+//
+// The resulting tree defines an ordering relation on nodes in the following cases:
+// (1) When more than one search patterns exist at the same operator level, they
+// are concatenated in order.
+// (2) Any nonterminal node is concatenated (ordered in the tree) if its
+// children transitively contain one or more search patterns.
+func partitionParameters(nodes []Node) []Node {
+	patterns := []Node{}
+	otherParams := []Node{}
+	for _, n := range nodes {
+		switch v := n.(type) {
+		case Parameter:
+			if v.Field == "" {
+				patterns = append(patterns, n)
+			} else {
+				otherParams = append(otherParams, n)
+			}
+		case Operator:
+			// Ideas here:
+			// (1) concat only if not contains patterns? group in otherparams otherwise?
+			// (2) if single concat reduce? => this makes no difference
+			log15.Info("Yes", "concatting node to pats. existing", patterns, "new", n)
+			if containsPattern(n) {
+				patterns = append(patterns, n)
+			} else {
+				otherParams = append(otherParams, n)
+			}
+		}
+	}
+	orderedPatterns := []Node{}
+	if len(patterns) > 1 {
+		log15.Info("Yes", "concat more than one", patterns)
+		orderedPatterns = newOperator(patterns, Concat)
+	} else {
+		log15.Info("Yes", "concat is just one", patterns)
+		orderedPatterns = patterns
+	}
+	return newOperator(append(otherParams, orderedPatterns...), And)
+}
+
 // scanParameterList scans for consecutive leaf nodes.
 func (p *parser) parseParameterList() ([]Node, error) {
 	var nodes []Node
@@ -215,7 +286,7 @@ func (p *parser) parseParameterList() ([]Node, error) {
 			return nil, err
 		}
 		if p.done() {
-			break
+			goto done
 		}
 		switch {
 		case p.expect(LPAREN):
@@ -229,22 +300,19 @@ func (p *parser) parseParameterList() ([]Node, error) {
 			p.balanced--
 			if len(nodes) == 0 {
 				// Return a non-nil node if we parsed "()".
-				return []Node{Parameter{Value: ""}}, nil
+				nodes = []Node{Parameter{Value: ""}}
 			}
-			return newOperator(nodes, Concat), nil
+			goto done
 		case p.match(AND), p.match(OR):
 			// Caller advances.
-			return newOperator(nodes, Concat), nil
+			goto done
 		default:
 			parameter := p.ParseParameter()
 			nodes = append(nodes, parameter)
 		}
 	}
-	var newNodes []Node
-	for _, n := range nodes {
-		newNodes = append(newNodes, newOperator([]Node{n}, Concat)...)
-	}
-	return newNodes, nil
+done:
+	return partitionParameters(nodes), nil
 }
 
 // reduce takes lists of left and right nodes and reduces them if possible. For example,
